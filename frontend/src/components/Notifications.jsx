@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 
-const Notifications = ({ type, message, onClose, onRetry }) => {
+const Notifications = ({ type, message, onClose, onRetry, details }) => {
   const [visible, setVisible] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   
   useEffect(() => {
     setVisible(true);
@@ -28,15 +29,31 @@ const Notifications = ({ type, message, onClose, onRetry }) => {
     if (onRetry) onRetry();
   };
   
+  // Function to get the appropriate icon based on notification type
+  const getIcon = () => {
+    switch(type) {
+      case 'success': return '✓';
+      case 'error': return '✕';
+      case 'warning': return '⚠';
+      case 'alert': return '🔔';
+      default: return 'ℹ';
+    }
+  };
+  
   return (
-    <div className={`notification ${type} ${visible ? 'visible' : 'hidden'}`}>
+    <div className={`notification ${type} ${visible ? 'visible' : 'hidden'} ${expanded ? 'expanded' : ''}`}>
       <div className="notification-content">
         <span className={`notification-icon ${type}`}>
-          {type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ'}
+          {getIcon()}
         </span>
         <span className="notification-message">{message}</span>
         
         <div className="notification-actions">
+          {details && (
+            <button className="expand-btn" onClick={() => setExpanded(!expanded)}>
+              {expanded ? 'Less' : 'More'}
+            </button>
+          )}
           {type === 'error' && onRetry && (
             <button className="retry-btn" onClick={handleRetry}>
               Retry
@@ -47,6 +64,23 @@ const Notifications = ({ type, message, onClose, onRetry }) => {
           </button>
         </div>
       </div>
+      
+      {expanded && details && (
+        <div className="notification-details">
+          {details.userLocation && (
+            <p><strong>Your location:</strong> {details.userLocation}</p>
+          )}
+          {details.outbreakLocation && (
+            <p><strong>Outbreak location:</strong> {details.outbreakLocation}</p>
+          )}
+          {details.distance && (
+            <p><strong>Distance:</strong> {(details.distance / 1000).toFixed(2)}km</p>
+          )}
+          {details.infectedCount && (
+            <p><strong>Cases:</strong> {details.infectedCount}</p>
+          )}
+        </div>
+      )}
     </div>
   );
 };

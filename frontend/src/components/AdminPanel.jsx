@@ -5,6 +5,7 @@ const AdminPanel = ({ outbreakLocations, infections, fetchOutbreakLocations }) =
   const [activeTab, setActiveTab] = useState('dashboard');
   const [totalInfected, setTotalInfected] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
     const fetchData = async () => {
@@ -35,118 +36,177 @@ const AdminPanel = ({ outbreakLocations, infections, fetchOutbreakLocations }) =
     }
   };
 
+  // Function to filter locations based on search term
+  const filteredOutbreakLocations = outbreakLocations.filter(location => 
+    location.location.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  // Function to filter infections based on search term
+  const filteredInfections = infections.filter(infection => 
+    infection.location.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    infection.address.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
   return (
     <div className="admin-panel">
-      <h2>Health Official Dashboard</h2>
+      <div className="admin-header">
+        <h2>Health Official Dashboard</h2>
+        <div className="admin-controls">
+          <div className="search-container">
+            <input
+              type="text"
+              placeholder="Search by location or address..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="search-input"
+            />
+            <i className="search-icon">🔍</i>
+          </div>
+          <button 
+            className="refresh-button"
+            onClick={handleRefreshData}
+            disabled={loading}
+          >
+            {loading ? 'Refreshing...' : '↻ Refresh Data'}
+          </button>
+        </div>
+      </div>
       
       <div className="tab-navigation">
         <button 
           className={`tab-button ${activeTab === 'dashboard' ? 'active' : ''}`}
           onClick={() => setActiveTab('dashboard')}
         >
-          Dashboard
+          <i className="tab-icon">📊</i> Dashboard
         </button>
         <button 
           className={`tab-button ${activeTab === 'outbreaks' ? 'active' : ''}`}
           onClick={() => setActiveTab('outbreaks')}
         >
-          Outbreak Locations
+          <i className="tab-icon">📍</i> Outbreak Locations
         </button>
         <button 
           className={`tab-button ${activeTab === 'infections' ? 'active' : ''}`}
           onClick={() => setActiveTab('infections')}
         >
-          Infection Reports
+          <i className="tab-icon">🏥</i> Infection Reports
         </button>
       </div>
       
       <div className="tab-content">
-        {activeTab === 'dashboard' && (
-          <>
-            <div className="stats-grid">
-              <div className="stat-card">
+        {/* DASHBOARD TAB */}
+        <div className={`tab-pane ${activeTab === 'dashboard' ? 'active' : 'inactive'}`}>
+          <div className="stats-grid">
+            <div className="stat-card primary">
+              <div className="stat-icon">👥</div>
+              <div className="stat-content">
                 <h4>Total Infections</h4>
                 <p>{totalInfected}</p>
               </div>
-              <div className="stat-card">
+            </div>
+            <div className="stat-card warning">
+              <div className="stat-icon">🔴</div>
+              <div className="stat-content">
                 <h4>Outbreak Areas</h4>
                 <p>{outbreakLocations.length}</p>
               </div>
-              <div className="stat-card">
+            </div>
+            <div className="stat-card info">
+              <div className="stat-icon">📝</div>
+              <div className="stat-content">
                 <h4>Recent Reports</h4>
                 <p>{infections.length}</p>
               </div>
             </div>
-            
-            <button 
-              className="btn"
-              onClick={handleRefreshData}
-              disabled={loading}
-            >
-              {loading ? 'Refreshing...' : 'Refresh Data'}
-            </button>
-          </>
-        )}
-        
-        {activeTab === 'outbreaks' && (
-          <div>
-            <h3>All Outbreak Locations</h3>
-            <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '1rem' }}>
-              <thead>
-                <tr style={{ backgroundColor: '#f2f2f2' }}>
-                  <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Location (Lat, Long)</th>
-                  <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Infected Count</th>
-                  <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Last Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {outbreakLocations.map((loc, idx) => (
-                  <tr key={idx} style={{ borderBottom: '1px solid #ddd' }}>
-                    <td style={{ padding: '0.75rem' }}>{loc.location}</td>
-                    <td style={{ padding: '0.75rem' }}>{loc.infectedCount}</td>
-                    <td style={{ padding: '0.75rem' }}>{loc.timestamp}</td>
-                  </tr>
-                ))}
-                {outbreakLocations.length === 0 && (
-                  <tr>
-                    <td colSpan="3" style={{ padding: '0.75rem', textAlign: 'center' }}>No outbreak locations reported yet</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
           </div>
-        )}
+        </div>
         
-        {activeTab === 'infections' && (
-          <div>
-            <h3>Recent Infection Reports</h3>
-            <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '1rem' }}>
+        {/* OUTBREAKS TAB */}
+        <div className={`tab-pane ${activeTab === 'outbreaks' ? 'active' : 'inactive'}`}>
+          <div className="table-container">
+            <div className="table-header">
+              <h3>Outbreak Locations</h3>
+              <span className="record-count">{filteredOutbreakLocations.length} locations</span>
+            </div>
+            <table className="data-table">
               <thead>
-                <tr style={{ backgroundColor: '#f2f2f2' }}>
-                  <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Address</th>
-                  <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Location</th>
-                  <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Reported Time</th>
+                <tr>
+                  <th>Location (Lat, Long)</th>
+                  <th>Infected Count</th>
+                  <th>Last Updated</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
-                {infections.map((inf, idx) => (
-                  <tr key={idx} style={{ borderBottom: '1px solid #ddd' }}>
-                    <td style={{ padding: '0.75rem' }}>
-                      {inf.address.substring(0, 6)}...{inf.address.substring(inf.address.length - 4)}
+                {filteredOutbreakLocations.map((loc, idx) => (
+                  <tr key={idx} className={idx % 2 === 0 ? 'even-row' : 'odd-row'}>
+                    <td className="location-cell">{loc.location}</td>
+                    <td className="count-cell">{loc.infectedCount}</td>
+                    <td>{loc.timestamp}</td>
+                    <td>
+                      <span className={`status-badge ${loc.infectedCount > 10 ? 'critical' : loc.infectedCount > 5 ? 'warning' : 'normal'}`}>
+                        {loc.infectedCount > 10 ? 'Critical' : loc.infectedCount > 5 ? 'Warning' : 'Monitoring'}
+                      </span>
                     </td>
-                    <td style={{ padding: '0.75rem' }}>{inf.location}</td>
-                    <td style={{ padding: '0.75rem' }}>{inf.timestamp}</td>
                   </tr>
                 ))}
-                {infections.length === 0 && (
+                {filteredOutbreakLocations.length === 0 && (
                   <tr>
-                    <td colSpan="3" style={{ padding: '0.75rem', textAlign: 'center' }}>No infections reported yet</td>
+                    <td colSpan="4" className="empty-table-message">
+                      {searchTerm ? "No matching outbreak locations found" : "No outbreak locations reported yet"}
+                    </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
-        )}
+        </div>
+        
+        {/* INFECTIONS TAB */}
+        <div className={`tab-pane ${activeTab === 'infections' ? 'active' : 'inactive'}`}>
+          <div className="table-container">
+            <div className="table-header">
+              <h3>Infection Reports</h3>
+              <span className="record-count">{filteredInfections.length} reports</span>
+            </div>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Address</th>
+                  <th>Location</th>
+                  <th>Reported Time</th>
+                  <th>Verified</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredInfections.map((inf, idx) => (
+                  <tr key={idx} className={idx % 2 === 0 ? 'even-row' : 'odd-row'}>
+                    <td className="address-cell">
+                      <div className="address-container">
+                        <span className="address-text">{inf.address.substring(0, 6)}...{inf.address.substring(inf.address.length - 4)}</span>
+                        <button className="copy-btn" onClick={() => navigator.clipboard.writeText(inf.address)}>Copy</button>
+                      </div>
+                    </td>
+                    <td>{inf.location}</td>
+                    <td>{inf.timestamp}</td>
+                    <td>
+                      <span className="verified-badge">
+                        <i className="verify-icon">✓</i> Blockchain Verified
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                {filteredInfections.length === 0 && (
+                  <tr>
+                    <td colSpan="4" className="empty-table-message">
+                      {searchTerm ? "No matching infection reports found" : "No infections reported yet"}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   );

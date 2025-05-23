@@ -1,119 +1,124 @@
 import Web3 from 'web3';
 
 /**
- * Creates a subscription to contract events with proper error handling
- * and fallback to polling if subscription fails
- * 
- * @param {Object} contract - Web3 contract instance
- * @param {String} eventName - Name of the event to subscribe to
- * @param {Object} options - Event filter options
- * @param {Function} onData - Callback for event data
- * @param {Function} onError - Callback for errors
- * @returns {Object} - An object with subscription cleanup methods
+ * Create a safe subscription to contract events with fallback mechanisms
+ * @param {Object} contract - The web3 contract instance
+ * @param {string} eventName - The name of the event to subscribe to
+ * @param {Object} options - Subscription options (filter, fromBlock, etc.)
+ * @param {Function} onData - Callback for data events
+ * @param {Function} onError - Callback for error handling
+ * @returns {Object} Subscription object with unsubscribe method
  */
-export const createSafeEventSubscription = (contract, eventName, options = {}, onData, onError) => {
-  if (!contract || !contract.events || !contract.events[eventName]) {
-    console.error(`Event ${eventName} not found on contract`);
-    return {
-      unsubscribe: () => {},
-      isActive: false
+const createSafeEventSubscription = (contract, eventName, options = {}, onData, onError) => {
+  // Check if contract and events are available
+  if (!contract || !contract.events) {
+    console.log(`Contract or events not available`);
+    return { 
+      unsubscribe: () => {}, 
+      isActive: false 
     };
   }
   
-  // Store the last checked block for polling fallback
-  let lastCheckedBlock = 0;
-  let subscription = null;
-  let pollingInterval = null;
-  let isSubscriptionActive = false;
-  
-  // Attempt to create a real-time subscription
-  try {
-    console.log(`Subscribing to ${eventName} events...`);
-    subscription = contract.events[eventName](options)
-      .on('connected', (subId) => {
-        console.log(`${eventName} subscription connected with ID:`, subId);
-        isSubscriptionActive = true;
-      })
-      .on('data', (event) => {
-        console.log(`${eventName} event received:`, event);
-        if (onData) onData(event);
-      })
-      .on('error', (error) => {
-        console.error(`Error in ${eventName} event:`, error);
-        isSubscriptionActive = false;
-        if (onError) onError(error);
-        
-        // If subscription fails, fall back to polling
-        setupPolling();
-      });
-  } catch (error) {
-    console.error(`Failed to subscribe to ${eventName} events:`, error);
-    // Fall back to polling if subscription fails
-    setupPolling();
+  // Check if we're using a mock contract
+  if (contract.isMockContract === true) {
+    return {
+      unsubscribe: () => console.log(`Mock unsubscribe for ${eventName}`),
+      isActive: true
+    };
   }
   
-  // Setup polling as a fallback
-  const setupPolling = async () => {
-    if (pollingInterval) clearInterval(pollingInterval);
+  // Check if the specific event is available
+  const eventFunc = contract.events[eventName];
+  if (!eventFunc) {
+    console.log(`Contract or event ${eventName} not available`);
+    return { 
+      unsubscribe: () => {}, 
+      isActive: false 
+    };
+  }
+  
+  let isActive = false;
+  let subscription = null;
+  
+  try {
+    // Set up default options
+    const defaultOptions = {
+      filter: {},
+      fromBlock: 'latest'
+    };
     
+    // Merge with user options
+    const subscriptionOptions = { ...defaultOptions, ...options };
+    
+    // Attempt to increase listener limit if it's causing issues
+    if (contract._provider && contract._provider.setMaxListeners) {
+      contract._provider.setMaxListeners(30);
+    }
+    
+    // Create the subscription, but handle cases where Web3 subscription fails
     try {
-      // Get current block to start polling from
-      const web3 = new Web3(window.ethereum || 'http://localhost:7545');
-      lastCheckedBlock = await web3.eth.getBlockNumber();
-      console.log(`Setting up polling for ${eventName} events starting from block ${lastCheckedBlock}`);
-      
-      // Poll for past events every 10 seconds
-      pollingInterval = setInterval(async () => {
+      subscription = eventFunc(subscriptionOptions)
+        .on('connected', (subscriptionId) => {
+          console.log(`${eventName} event subscription connected with ID:`, subscriptionId);
+          isActive = true;
+        })
+        .on('data', (event) => {
+          console.log(`${eventName} event received:`, event);
+          if (typeof onData === 'function') {
+            onData(event);
+          }
+        })
+        .on('error', (error) => {
+          console.error(`Error in ${eventName} event:`, error);
+          isActive = false;
+          if (typeof onError === 'function') {
+            onError(error);
+          }
+        });
+    } catch (subError) {
+      console.error(`Error creating subscription for ${eventName}:`, subError);
+      return {
+        unsubscribe: () => {},
+        isActive: false
+      };
+    }
+    
+    // Return a clean interface for the subscription
+    return {
+      unsubscribe: () => {
         try {
-          const currentBlock = await web3.eth.getBlockNumber();
-          if (currentBlock > lastCheckedBlock) {
-            console.log(`Polling for ${eventName} events from block ${lastCheckedBlock} to ${currentBlock}`);
-            
-            const events = await contract.getPastEvents(eventName, {
-              fromBlock: lastCheckedBlock,
-              toBlock: currentBlock
-            });
-            
-            events.forEach(event => {
-              console.log(`${eventName} event found via polling:`, event);
-              if (onData) onData(event);
-            });
-            
-            lastCheckedBlock = currentBlock;
+          if (subscription) {
+            // Different Web3 versions have different ways to unsubscribe
+            if (typeof subscription.unsubscribe === 'function') {
+              subscription.unsubscribe();
+            } else if (typeof subscription.removeAllListeners === 'function') {
+              subscription.removeAllListeners();
+            } else {
+              // Try direct property access
+              const subId = subscription.id || subscription.subscriptionId;
+              if (subId && contract._requestManager && 
+                  typeof contract._requestManager.removeSubscription === 'function') {
+                contract._requestManager.removeSubscription(subId);
+              }
+            }
+            console.log(`Unsubscribed from ${eventName} events`);
           }
         } catch (error) {
-          console.error(`Error polling for ${eventName} events:`, error);
-          if (onError) onError(error);
+          console.error(`Error unsubscribing from ${eventName}:`, error);
         }
-      }, 10000); // Poll every 10 seconds
-    } catch (error) {
-      console.error(`Error setting up polling for ${eventName}:`, error);
-    }
-  };
-  
-  // Return an object with methods to cleanup subscriptions
-  return {
-    unsubscribe: () => {
-      console.log(`Unsubscribing from ${eventName} events`);
-      try {
-        if (subscription) {
-          if (typeof subscription.unsubscribe === 'function') {
-            subscription.unsubscribe();
-          } else if (typeof subscription.removeAllListeners === 'function') {
-            subscription.removeAllListeners();
-          }
-        }
-      } catch (e) {
-        console.error(`Error unsubscribing from ${eventName}:`, e);
-      }
-      
-      if (pollingInterval) {
-        clearInterval(pollingInterval);
-        pollingInterval = null;
-      }
-    },
-    isActive: () => isSubscriptionActive
-  };
+        isActive = false;
+      },
+      isActive: () => isActive
+    };
+  } catch (error) {
+    console.error(`Error creating subscription for ${eventName}:`, error);
+    
+    // Return a dummy object in case of failure
+    return {
+      unsubscribe: () => console.log(`Dummy unsubscribe for ${eventName}`),
+      isActive: false
+    };
+  }
 };
 
 export default createSafeEventSubscription;

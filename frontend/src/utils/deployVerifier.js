@@ -1,6 +1,7 @@
 import Web3 from 'web3';
+import { getWeb3 } from './web3Provider';
 import OutbreakTrackingContract from '../contracts/OutbreakTracking.json';
-import { NETWORK_CONTRACTS, getNetworkNameById } from './contractConfig';
+import { OUTBREAK_CONTRACT_ADDRESS } from './contractConfig';
 
 /**
  * Utility to verify contract deployments across different networks
@@ -101,4 +102,146 @@ export const verifyContractDeployment = async (targetNetworkIds = null) => {
   return results;
 };
 
-export default { verifyContractDeployment };
+/**
+ * Verify that the contract is deployed correctly
+ * @returns {Promise<Object>} Verification results
+ */
+export const verifyDeployment = async () => {
+  try {
+    // Initialize Web3
+    const web3 = await getWeb3();
+    
+    // Get the network ID
+    const networkId = await web3.eth.net.getId();
+    
+    // Check if we have a deployment for this network in our artifacts
+    const deployedNetwork = OutbreakTrackingContract.networks[networkId];
+    
+    // Get expected contract address
+    let contractAddress;
+    if (deployedNetwork && deployedNetwork.address) {
+      contractAddress = deployedNetwork.address;
+    } else {
+      contractAddress = OUTBREAK_CONTRACT_ADDRESS;
+    }
+    
+    // Check for code at the address
+    const code = await web3.eth.getCode(contractAddress);
+    const hasCode = code !== '0x' && code !== '0x0';
+    
+    if (!hasCode) {
+      return {
+        success: false,
+        error: `No contract found at address ${contractAddress}`,
+        networkId,
+        address: contractAddress
+      };
+    }
+    
+    // Try to initialize the contract
+    const contract = new web3.eth.Contract(
+      OutbreakTrackingContract.abi,
+      contractAddress
+    );
+    
+    // Check if it implements a basic function
+    try {
+      const owner = await contract.methods.owner().call();
+      const radius = await contract.methods.outbreakRadius().call();
+      
+      return {
+        success: true,
+        networkId,
+        address: contractAddress,
+        owner,
+        radius: parseInt(radius),
+        deployedViaArtifact: Boolean(deployedNetwork)
+      };
+    } catch (callError) {
+      return {
+        success: false,
+        error: `Contract exists but functions don't match ABI: ${callError.message}`,
+        networkId,
+        address: contractAddress
+      };
+    }
+  } catch (error) {
+    console.error("Deployment verification error:", error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+};
+
+/**
+ * Checks all networks in the contract artifact to find viable deployments
+ * @returns {Promise<Array>} List of deployments across networks
+ */
+export const findContractDeployments = async () => {
+  try {
+    const web3 = await getWeb3();
+    const deployments = [];
+    
+    // Get current network
+    const currentNetworkId = await web3.eth.net.getId();
+    
+    // Iterate through all networks in the contract artifact
+    for (const networkId in OutbreakTrackingContract.networks) {
+      const deployment = OutbreakTrackingContract.networks[networkId];
+      
+      if (deployment && deployment.address) {
+        try {
+          // Check if the contract exists at this address
+          const code = await web3.eth.getCode(deployment.address);
+          const hasCode = code !== '0x' && code !== '0x0';
+          
+          deployments.push({
+            networkId: parseInt(networkId),
+            address: deployment.address,
+            exists: hasCode,
+            isCurrent: parseInt(networkId) === currentNetworkId
+          });
+        } catch (error) {
+          deployments.push({
+            networkId: parseInt(networkId),
+            address: deployment.address,
+            exists: false,
+            error: error.message
+          });
+        }
+      }
+    }
+    
+    // Also check the hardcoded address
+    if (!deployments.find(d => d.address === OUTBREAK_CONTRACT_ADDRESS)) {
+      try {
+        const code = await web3.eth.getCode(OUTBREAK_CONTRACT_ADDRESS);
+        const hasCode = code !== '0x' && code !== '0x0';
+        
+        deployments.push({
+          networkId: 'config',
+          address: OUTBREAK_CONTRACT_ADDRESS,
+          exists: hasCode,
+          isCurrent: false
+        });
+      } catch (error) {
+        deployments.push({
+          networkId: 'config',
+          address: OUTBREAK_CONTRACT_ADDRESS,
+          exists: false,
+          error: error.message
+        });
+      }
+    }
+    
+    return deployments;
+  } catch (error) {
+    console.error("Error finding deployments:", error);
+    return [{
+      error: error.message
+    }];
+  }
+};
+
+export default { verifyContractDeployment, verifyDeployment, findContractDeployments };

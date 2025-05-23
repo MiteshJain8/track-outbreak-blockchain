@@ -4,19 +4,14 @@ import Map from "./components/Map";
 import OutbreakForm from "./components/OutbreakForm";
 import Notifications from "./components/Notifications";
 import AdminPanel from "./components/AdminPanel";
-import ContractDebug from "./components/ContractDebug";
 import { 
   initializeEthers, 
   connectWallet,
-  // setupEventListeners,
   pollForEvents,
   getAllOutbreakLocations,
   checkWeb3Status
 } from "./utils/blockchain";
 import createSafeEventSubscription from './utils/eventHelper';
-
-// Import Web3 correctly to prevent errors in polling fallback
-import Web3 from 'web3';
 
 function App() {
   const [account, setAccount] = useState("");
@@ -24,11 +19,10 @@ function App() {
   const [userLocation, setUserLocation] = useState({ lat: 0, lng: 0 });
   const [locationString, setLocationString] = useState("");
   const [outbreakLocations, setOutbreakLocations] = useState([]);
-  // const [counts, setCounts] = useState([]);
   const [infections, setInfections] = useState([]);
   const [notification, setNotification] = useState("");
   const [exposureData, setExposureData] = useState({ exposed: false, exposureCount: 0 });
-  const [isAdmin, setIsAdmin] = useState(false); // Simple admin toggle - in real app would use auth
+  const [isAdmin, setIsAdmin] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [web3Status, setWeb3Status] = useState({
     available: false,
@@ -40,18 +34,14 @@ function App() {
   const [connectionRetries, setConnectionRetries] = useState(0);
   const [lastCheckedBlock, setLastCheckedBlock] = useState(0);
   const [usingEventPolling, setUsingEventPolling] = useState(false);
+  const [proximityAlert, setProximityAlert] = useState(null);
 
-  // Fix: Add a mounted ref to prevent state updates after unmounting
   const isMountedRef = React.useRef(true);
-  
-  // Fix: Add ref for event cleanup function
   const cleanupListenersRef = React.useRef(null);
 
   useEffect(() => {
-    // Set mounted flag
     isMountedRef.current = true;
     
-    // Get user's geolocation
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition((position) => {
         if (isMountedRef.current) {
@@ -89,40 +79,26 @@ function App() {
 
     checkIfWalletIsConnected();
     
-    // Cleanup function to prevent memory leaks and infinite loops
     return () => {
       isMountedRef.current = false;
       
-      // Clean up event listeners if they exist
       if (cleanupListenersRef.current) {
         cleanupListenersRef.current();
       }
     };
-  }, []); // <-- Empty dependency array to run only once on mount
+  }, []);
 
-  // Separate effect for polling to avoid recreation on every state change
   useEffect(() => {
     let pollingInterval = null;
     
     if (isConnected && usingEventPolling) {
-      console.log("Setting up event polling...");
-      
-      // Poll for events every 15 seconds
       pollingInterval = setInterval(async () => {
-        if (!isMountedRef.current) return; // Don't proceed if component unmounted
+        if (!isMountedRef.current) return;
         
         try {
           const newLastBlock = await pollForEvents(
             lastCheckedBlock,
-            (infection) => {
-              if (isMountedRef.current) {
-                setInfections((prev) => [...prev, infection]);
-                setNotification({
-                  type: 'info',
-                  message: `New infection reported at ${infection.location}`
-                });
-              }
-            },
+            handleNewInfection,
             (outbreak) => {
               if (isMountedRef.current) {
                 setNotification({
@@ -140,7 +116,7 @@ function App() {
         } catch (error) {
           console.error("Error polling for events:", error);
         }
-      }, 15000); // Poll every 15 seconds
+      }, 15000);
     }
     
     return () => {
@@ -148,29 +124,22 @@ function App() {
         clearInterval(pollingInterval);
       }
     };
-  }, [isConnected, usingEventPolling]); // Only depend on connection status and polling mode
+  }, [isConnected, usingEventPolling]);
 
   const initializeBlockchain = async () => {
     try {
-      // Initialize ethers and get contract instance
       const { contract } = await initializeEthers();
       
-      // Try to set up WebSocket event listeners with better error handling
       try {
-        console.log("Attempting to set up event listeners...");
-        
-        // Clean up previous listeners if they exist
         if (cleanupListenersRef.current) {
           cleanupListenersRef.current();
         }
         
-        // Use our safe event subscription helper
         const newInfectionSub = createSafeEventSubscription(
           contract,
           'NewInfection',
           {},
           (event) => {
-            // Process the event data
             const { individualAddress, location, timestamp } = event.returnValues;
             const infection = {
               address: individualAddress,
@@ -178,13 +147,7 @@ function App() {
               timestamp: new Date(timestamp * 1000).toLocaleString()
             };
             
-            if (isMountedRef.current) {
-              setInfections((prev) => [...prev, infection]);
-              setNotification({
-                type: 'info',
-                message: `New infection reported at ${infection.location}`
-              });
-            }
+            handleNewInfection(infection);
           },
           (error) => {
             console.error("New infection event error:", error);
@@ -196,7 +159,6 @@ function App() {
           'PotentialOutbreak',
           {},
           (event) => {
-            // Process the event data
             const { location, infectedCount, timestamp } = event.returnValues;
             const outbreak = {
               location,
@@ -217,16 +179,48 @@ function App() {
           }
         );
         
-        // Store the cleanup functions
+        // Add ProximityAlert event listener
+        const proximityAlertSub = createSafeEventSubscription(
+          contract,
+          'ProximityAlert',
+          {},
+          (event) => {
+            const { user, userLocation, outbreakLocation, distance } = event.returnValues;
+            
+            // Only show alerts for the current user
+            if (user.toLowerCase() === account.toLowerCase()) {
+              const distanceKm = (parseInt(distance) / 1000).toFixed(2);
+              
+              if (isMountedRef.current) {
+                setNotification({
+                  type: 'alert',
+                  message: `PROXIMITY ALERT: You are ${distanceKm}km from an outbreak area at ${outbreakLocation}`,
+                  details: {
+                    userLocation,
+                    outbreakLocation,
+                    distance: parseInt(distance)
+                  }
+                });
+                setProximityAlert({
+                  userLocation,
+                  outbreakLocation,
+                  distance: parseInt(distance)
+                });
+              }
+            }
+          },
+          (error) => {
+            console.error("Proximity alert event error:", error);
+          }
+        );
+        
         cleanupListenersRef.current = () => {
           newInfectionSub.unsubscribe();
           outbreakSub.unsubscribe();
+          proximityAlertSub.unsubscribe();
         };
         
-        // Check if we're using real-time events or polling
-        setUsingEventPolling(!newInfectionSub.isActive || !outbreakSub.isActive);
-        
-        console.log("Event listeners set up successfully");
+        setUsingEventPolling(!newInfectionSub.isActive || !outbreakSub.isActive || !proximityAlertSub.isActive);
       } catch (eventError) {
         console.error("Event setup failed, falling back to polling:", eventError);
         
@@ -235,7 +229,6 @@ function App() {
         }
       }
 
-      // Load initial data
       fetchOutbreakLocations().catch(error => {
         console.error("Initial data fetch failed:", error);
       });
@@ -251,14 +244,12 @@ function App() {
     }
   };
 
-  // Update the function that fetches outbreak locations
   const fetchOutbreakLocations = async () => {
-    if (!isMountedRef.current) return; // Don't proceed if component unmounted
+    if (!isMountedRef.current) return;
     
     try {
       setIsLoading(true);
       
-      // Check Web3 status and blockchain connection
       const status = await checkWeb3Status();
       
       if (isMountedRef.current) {
@@ -266,20 +257,25 @@ function App() {
         
         if (status.connected) {
           try {
-            console.log("Connected to blockchain, fetching data...");
-            
-            // If connected, load the data
             const data = await getAllOutbreakLocations();
             
-            // Check if we have valid data
             if (data && Array.isArray(data.locations)) {
-              console.log("Received outbreak locations:", data.locations.length);
-              
               if (data.locations.length > 0) {
-                setOutbreakLocations(data.locations);
+                const uniqueLocations = {};
+                
+                data.locations.forEach(loc => {
+                  const key = loc.id || loc.location;
+                  if (!uniqueLocations[key] || loc.infectedCount > uniqueLocations[key].infectedCount) {
+                    uniqueLocations[key] = loc;
+                  }
+                });
+                
+                const deduplicatedLocations = Object.values(uniqueLocations);
+                
+                setOutbreakLocations(deduplicatedLocations);
                 setNotification({
                   type: 'success',
-                  message: `Loaded ${data.locations.length} outbreak locations`
+                  message: `Loaded ${deduplicatedLocations.length} outbreak locations`
                 });
               } else {
                 setOutbreakLocations([]);
@@ -289,7 +285,6 @@ function App() {
                 });
               }
             } else {
-              // If we got invalid data, show a warning
               console.warn("Received invalid outbreak locations data:", data);
               setOutbreakLocations([]);
               setNotification({
@@ -300,20 +295,17 @@ function App() {
           } catch (dataError) {
             console.error("Error loading outbreak data:", dataError);
             
-            // Show error but don't break the app
             setNotification({
               type: 'error',
               message: `Error loading data: ${dataError.message}`
             });
           }
         } else {
-          // If not connected, show error notification
           setNotification({
             type: 'error',
             message: status.errorMessage || 'Failed to connect to blockchain. Please check your connection settings.'
           });
           
-          // Try to reconnect if fewer than 3 retries
           if (connectionRetries < 3) {
             setConnectionRetries(prev => prev + 1);
           }
@@ -350,19 +342,16 @@ function App() {
   const handleFormSubmit = (newNotification) => {
     setNotification(newNotification);
     
-    // Refresh outbreak locations after a successful submission
     if (newNotification.type === 'success') {
       refreshOutbreakLocations();
     }
   };
   
-  // Function to refresh outbreak locations data
   const refreshOutbreakLocations = async () => {
     try {
       setIsLoading(true);
       const data = await getAllOutbreakLocations();
       setOutbreakLocations(data.locations);
-      // setCounts(data.counts);
     } catch (error) {
       console.error("Error refreshing data:", error);
       setNotification({
@@ -374,17 +363,58 @@ function App() {
     }
   };
   
-  // Clear notification after it's displayed
   const clearNotification = () => {
     setNotification("");
   };
   
-  // Try to reconnect if the user clicks the retry button
   const handleRetryConnection = () => {
-    // Explicitly call fetchOutbreakLocations instead of just incrementing retry count
     fetchOutbreakLocations();
   };
 
+  const handleNewInfection = (infection) => {
+    if (isMountedRef.current) {
+      setInfections(prev => {
+        const isDuplicate = prev.some(
+          inf => inf.address === infection.address && 
+                 inf.location === infection.location
+        );
+        
+        if (!isDuplicate) {
+          setNotification({
+            type: 'info',
+            message: `New infection reported at ${infection.location}`
+          });
+          return [...prev, infection];
+        }
+        return prev;
+      });
+    }
+  };
+
+  useEffect(() => {
+    // Clear proximity alert after 30 seconds
+    if (proximityAlert) {
+      const timer = setTimeout(() => {
+        setProximityAlert(null);
+      }, 30000);
+      return () => clearTimeout(timer);
+    }
+  }, [proximityAlert]);
+
+  // Modify the handleNotification logic
+  const handleNotification = (newNotification) => {
+    setNotification(newNotification);
+    
+    // If this is a proximity alert, update the proximity alert state
+    if (newNotification.type === 'alert' && newNotification.details) {
+      setProximityAlert(newNotification.details);
+    }
+    
+    if (newNotification.type === 'success') {
+      refreshOutbreakLocations();
+    }
+  };
+  
   return (
     <div className="App">
       <header className="App-header">
@@ -420,20 +450,18 @@ function App() {
           <Notifications 
             type={notification.type} 
             message={notification.message} 
+            details={notification.details}
             onClose={clearNotification}
             onRetry={notification.type === 'error' ? handleRetryConnection : null}
           />
         )}
 
         {isAdmin && isConnected ? (
-          <>
-            <ContractDebug />
-            <AdminPanel 
-              outbreakLocations={outbreakLocations} 
-              infections={infections}
-              fetchOutbreakLocations={fetchOutbreakLocations}
-            />
-          </>
+          <AdminPanel 
+            outbreakLocations={outbreakLocations} 
+            infections={infections}
+            fetchOutbreakLocations={fetchOutbreakLocations}
+          />
         ) : (
           <>
             <div className="grid">
@@ -449,13 +477,14 @@ function App() {
                 setIsAdmin={setIsAdmin}
                 account={account}
                 locationString={locationString}
-                setNotification={setNotification}
+                setNotification={handleNotification}
                 isLoading={isLoading}
-                onFormSubmit={handleFormSubmit}
+                onFormSubmit={handleNotification}
               />
               <Map
                 userLocation={userLocation}
                 outbreakLocations={outbreakLocations}
+                proximityAlert={proximityAlert}
                 isLoading={isLoading}
               />
             </div>

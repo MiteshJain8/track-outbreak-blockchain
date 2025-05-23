@@ -2,83 +2,132 @@ import React, { useState } from 'react';
 import { 
   reportInfection, 
   checkProximity, 
-  reportNewLocation, 
   checkExposureRisk 
 } from '../utils/blockchain';
 
-const OutbreakForm = ({ account, locationString, setLocationString, setNotification, setLoading, setExposureData }) => {
+const OutbreakForm = ({ account, locationString, setLocationString, setNotification, setExposureData, onFormSubmit }) => {
   const [individualAddress, setIndividualAddress] = useState('');
   const [testResult, setTestResult] = useState(false);
   const [timeThreshold, setTimeThreshold] = useState(14);
+  const [isLoading, setIsLoading] = useState(false);
+  const [proximityChecked, setProximityChecked] = useState(false);
+  const [proximityResult, setProximityResult] = useState(null);
 
   const handleReportInfection = async () => {
     try {
-      setLoading(true);
+      setIsLoading(true);
       await reportInfection(
         individualAddress || account,
         locationString,
         testResult
       );
-      setNotification("Infection reported successfully!");
+      if (onFormSubmit) {
+        onFormSubmit({
+          type: 'success',
+          message: "Infection reported successfully!"
+        });
+      } else {
+        setNotification({
+          type: 'success',
+          message: "Infection reported successfully!"
+        });
+      }
     } catch (error) {
       console.error("Error reporting infection:", error);
-      setNotification("Error reporting infection: " + error.message);
+      setNotification({
+        type: 'error',
+        message: "Error reporting infection: " + error.message
+      });
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
   const handleCheckLocation = async () => {
     try {
-      setLoading(true);
-      const result = await checkProximity(locationString);
-      const isNearOutbreak = result[0];
+      setIsLoading(true);
+      setProximityChecked(false);
+      setProximityResult(null);
       
-      if (isNearOutbreak) {
-        setNotification(`Warning! You are near an outbreak area: ${result[1]} with ${result[2].toString()} cases.`);
+      const result = await checkProximity(locationString);
+      
+      // Enhanced proximity result handling
+      const proximity = {
+        isNearOutbreak: result[0] || result.isNearOutbreak,
+        outbreakLocation: result[1] || result.outbreakLocation,
+        infectedCount: parseInt(result[2] || result.infectedCount || 0),
+        distance: parseInt(result[3] || result.distance || 0)
+      };
+      
+      setProximityResult(proximity);
+      setProximityChecked(true);
+      
+      if (proximity.isNearOutbreak) {
+        const distanceKm = (proximity.distance / 1000).toFixed(2);
+        setNotification({
+          type: 'warning',
+          message: `Warning! You are ${distanceKm}km from an outbreak area: ${proximity.outbreakLocation} with ${proximity.infectedCount} cases.`
+        });
       } else {
-        setNotification("You are not near any known outbreak areas.");
+        setNotification({
+          type: 'info',
+          message: "You are not near any known outbreak areas."
+        });
       }
     } catch (error) {
       console.error("Error checking location:", error);
-      setNotification("Error checking location proximity: " + error.message);
+      setNotification({
+        type: 'error',
+        message: "Error checking location proximity: " + error.message
+      });
     } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleReportCurrentLocation = async () => {
-    try {
-      setLoading(true);
-      await reportNewLocation(locationString);
-      setNotification("Location reported successfully!");
-    } catch (error) {
-      console.error("Error reporting location:", error);
-      setNotification("Error reporting location: " + error.message);
-    } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
   const handleCheckExposureRisk = async () => {
     try {
-      setLoading(true);
+      setIsLoading(true);
       // Convert days to seconds
       const thresholdInSeconds = timeThreshold * 24 * 60 * 60;
-      const [exposed, exposureCount] = await checkExposureRisk(locationString, thresholdInSeconds);
+      const result = await checkExposureRisk(locationString, thresholdInSeconds);
       
-      setExposureData({ exposed, exposureCount: exposureCount.toNumber() });
-      
-      if (exposed) {
-        setNotification(`Warning! You have potential exposure to ${exposureCount.toString()} infected individuals in the last ${timeThreshold} days.`);
+      // Only update exposure data if there's actual exposure
+      if (result.exposed && parseInt(result.exposureCount) > 0) {
+        setExposureData({ 
+          exposed: true, 
+          exposureCount: parseInt(result.exposureCount) 
+        });
+        
+        setNotification({
+          type: 'warning',
+          message: `Warning! You have potential exposure to ${result.exposureCount.toString()} infected individuals in the last ${timeThreshold} days.`,
+          details: {
+            timeThreshold: timeThreshold,
+            exposureCount: parseInt(result.exposureCount),
+            location: locationString
+          }
+        });
       } else {
-        setNotification(`No exposure detected in the last ${timeThreshold} days at your current location.`);
+        // Reset exposure data if no exposure
+        setExposureData({ 
+          exposed: false, 
+          exposureCount: 0
+        });
+        
+        setNotification({
+          type: 'info',
+          message: `No exposure to infected individuals detected in the last ${timeThreshold} days at your current location.`
+        });
       }
     } catch (error) {
       console.error("Error checking exposure risk:", error);
-      setNotification("Error checking exposure risk: " + error.message);
+      setNotification({
+        type: 'error',
+        message: "Error checking exposure risk: " + error.message
+      });
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
@@ -131,32 +180,55 @@ const OutbreakForm = ({ account, locationString, setLocationString, setNotificat
       <button
         className="btn"
         onClick={handleReportInfection}
+        disabled={isLoading}
       >
-        Report Infection
+        {isLoading ? 'Processing...' : 'Report Infection'}
       </button>
 
       <div className="action-buttons">
         <button
           className="btn secondary"
           onClick={handleCheckLocation}
+          disabled={isLoading}
+          title="Check if you are near any outbreak zones (5km radius)"
         >
-          Check Proximity
+          Check Nearby Outbreaks
         </button>
         <button
           className="btn secondary"
-          onClick={handleReportCurrentLocation}
+          onClick={handleCheckExposureRisk}
+          disabled={isLoading}
+          title="Check if you were near infected individuals in the specified time period"
         >
-          Report My Location
+          Check Exposure History
         </button>
       </div>
       
-      <button
-        className="btn secondary"
-        onClick={handleCheckExposureRisk}
-        style={{ marginTop: '1rem' }}
-      >
-        Check Exposure Risk
-      </button>
+      {proximityChecked && proximityResult && (
+        <div className={`proximity-result ${proximityResult.isNearOutbreak ? 'proximity-warning' : 'proximity-safe'}`}>
+          {proximityResult.isNearOutbreak ? (
+            <>
+              <span className="proximity-icon">⚠️</span>
+              <div>
+                <p><strong>Outbreak Nearby!</strong></p>
+                <p>Distance: {(proximityResult.distance / 1000).toFixed(2)}km</p>
+                <p>Cases: {proximityResult.infectedCount}</p>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="proximity-icon">✓</span>
+              <p>No outbreaks detected nearby</p>
+            </>
+          )}
+        </div>
+      )}
+      
+      <div className="function-explanation">
+        <h4>About these functions:</h4>
+        <p><strong>Check Nearby Outbreaks:</strong> Shows if there are any active outbreak areas within 5km of your current location.</p>
+        <p><strong>Check Exposure History:</strong> Analyzes if you may have been in the same location as infected individuals within the Threshold time period.</p>
+      </div>
     </div>
   );
 };
